@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teclado de Superfície VR</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#eee}
+#info{position:fixed;inset:0 0 auto 0;padding:16px;font-size:15px;line-height:1.5;max-width:520px}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head><body>
+<div id="info"><b>Teclado de superfície (WebXR)</b><br>
+Abra no navegador do Quest, toque em <b>START AR</b>, ative o rastreamento de mãos, coloque as duas mãos abertas sobre uma mesa e fique parado por ~1,5 s. O teclado aparece ali. Toque nas teclas com os dedos.</div>
+<script type="module">
+import * as THREE from 'three';
+import {ARButton} from 'three/addons/webxr/ARButton.js';
+
+const P=0.024;               // distância entre teclas (m)
+const PRESS=0.018, RELEASE=0.035; // alturas (m) para apertar/soltar — ajuste se precisar
+
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(devicePixelRatio);renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;document.body.appendChild(renderer.domElement);
+document.body.appendChild(ARButton.createButton(renderer,{optionalFeatures:['hand-tracking','local-floor']}));
+const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.01,20);
+scene.add(camera,new THREE.HemisphereLight(0xffffff,0x444455,2.2));
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// painel de texto desenhado em canvas
+function panel(w,h,px){
+  const c=document.createElement('canvas');c.width=px;c.height=Math.round(px*h/w);
+  const t=new THREE.CanvasTexture(c);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:t,transparent:true}));
+  m.draw=fn=>{const g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);fn(g,c.width,c.height);t.needsUpdate=true};
+  return m;
+}
+
+// mensagem presa à cabeça
+const msg=panel(.3,.07,1024);msg.position.set(0,-.14,-.5);camera.add(msg);
+let lastMsg='';
+function say(s){if(s===lastMsg)return;lastMsg=s;msg.visible=true;
+  msg.draw((g,w,h)=>{g.fillStyle='rgba(20,22,30,.8)';g.fillRect(0,0,w,h);g.fillStyle='#fff';
+    g.font='44px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(s,w/2,h/2)})}
+say('Coloque as duas mãos abertas sobre a mesa');
+
+// teclado
+const kb=new THREE.Group();kb.visible=false;scene.add(kb);
+const plate=new THREE.Mesh(new THREE.BoxGeometry(10*P+.012,.002,4*P+.012),new THREE.MeshStandardMaterial({color:0x0b0d14,transparent:true,opacity:.6}));
+plate.position.y=.001;kb.add(plate);
+
+const layout=[
+  [...'qwertyuiop'].map(c=>[c,1]),
+  [...'asdfghjkl'].map(c=>[c,1]),
+  [['⇧',1.5],...[...'zxcvbnm'].map(c=>[c,1]),['⌫',1.5]],
+  [[',',1],['␣',5],['.',1],['⟲',1],['↵',2]]
+];
+const offs=[0,.5,0,0],keys=[];
+const base=new THREE.Color(0x2b3040),hi=new THREE.Color(0x4aa3ff);
+layout.forEach((row,r)=>{let x=offs[r];row.forEach(([ch,u])=>{
+  const cx=(x+u/2-5)*P,cz=(r-1.5)*P;x+=u;
+  const m=new THREE.Mesh(new THREE.BoxGeometry(u*P-.004,.006,P-.004),new THREE.MeshStandardMaterial({color:base}));
+  m.position.set(cx,.004,cz);
+  const lw=Math.max(.014,u*P-.012),lab=panel(lw,.014,64*Math.max(1,u));
+  lab.draw((g,w,h)=>{g.fillStyle='#fff';g.font=`${h*.7}px sans-serif`;g.textAlign='center';g.textBaseline='middle';
+    g.fillText(ch==='␣'?'espaço':ch,w/2,h/2)});
+  lab.rotation.x=-Math.PI/2;lab.position.set(cx,.0075,cz);
+  kb.add(m,lab);keys.push({m,ch,cx,cz,hw:u*P/2,hd:P/2,flash:0});
+})});
+
+// tela de texto digitado
+const out=panel(.26,.07,1024);out.position.set(0,.11,-.09);out.rotation.x=-.5;kb.add(out);
+let text='',shift=false;
+function drawText(){out.draw((g,w,h)=>{g.fillStyle='rgba(20,22,30,.85)';g.fillRect(0,0,w,h);
+  g.fillStyle='#fff';g.font='52px monospace';g.textBaseline='middle';
+  g.fillText((text.replace(/\n/g,'↵')+'▏').slice(-28),24,h/2)})}
+drawText();
+
+// som de clique
+let ac;function click(){try{ac=ac||new AudioContext();const o=ac.createOscillator(),g=ac.createGain();
+  o.frequency.value=900;g.gain.setValueAtTime(.15,ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+.05);o.connect(g).connect(ac.destination);
+  o.start();o.stop(ac.currentTime+.06)}catch(e){}}
+
+// mãos
+const hands=[renderer.xr.getHand(0),renderer.xr.getHand(1)];hands.forEach(h=>scene.add(h));
+const J=(h,n)=>{const j=h.joints&&h.joints[n];return j&&j.visible?j.getWorldPosition(new THREE.Vector3()):null};
+const TIPS=['index-finger-tip','middle-finger-tip','ring-finger-tip','pinky-finger-tip'];
+const dots=[];for(let i=0;i<8;i++){const d=new THREE.Mesh(new THREE.SphereGeometry(.007),new THREE.MeshBasicMaterial({color:0x66ccff}));d.visible=false;scene.add(d);dots.push(d)}
+const down={};
+let placed=false,hold=0,prevC=null;
+
+function press(k){
+  if(k.ch==='⇧')shift=!shift;
+  else if(k.ch==='⌫')text=text.slice(0,-1);
+  else if(k.ch==='⟲'){placed=false;kb.visible=false;hold=0;prevC=null;lastMsg='';say('Coloque as duas mãos abertas sobre a mesa');return}
+  else{text+=k.ch==='␣'?' ':k.ch==='↵'?'\n':(shift?k.ch.toUpperCase():k.ch);shift=false}
+  k.flash=1;click();drawText();
+}
+
+function place(ix){
+  const mid=ix[0].clone().add(ix[1]).multiplyScalar(.5);
+  const sy=(ix[0].y+ix[1].y)/2-.010;
+  const cam=renderer.xr.getCamera().position;
+  const yaw=Math.atan2(cam.x-mid.x,cam.z-mid.z);
+  kb.rotation.set(0,yaw,0);
+  kb.position.set(mid.x,sy,mid.z).addScaledVector(new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),.5*P);
+  kb.visible=true;placed=true;hold=0;
+  for(const k in down)delete down[k];
+  say('Pronto! Digite na mesa');setTimeout(()=>{if(placed)msg.visible=false},2500);
+}
+
+function calibrate(dt){
+  let ok=true;const w=[],ix=[];
+  for(const h of hands){
+    const a=J(h,'wrist'),b=J(h,'middle-finger-tip'),c=J(h,'index-finger-tip');
+    if(!a||!b||!c||Math.abs(a.y-b.y)>.04){ok=false;break}
+    w.push(a);ix.push(c);
+  }
+  if(ok&&(Math.abs(w[0].y-w[1].y)>.05||w[0].distanceTo(w[1])<.12))ok=false;
+  if(ok){const c=w[0].clone().add(w[1]);
+    if(prevC&&c.distanceTo(prevC)/Math.max(dt,.001)/2>.08)ok=false;prevC=c}
+  else prevC=null;
+  hold=ok?hold+dt:0;
+  say(ok?`Segure parado… ${Math.min(100,Math.round(hold/1.2*100))}%`:'Coloque as duas mãos abertas sobre a mesa');
+  if(hold>1.2)place(ix);
+}
+
+function step(dt){
+  const tips=[];
+  hands.forEach((h,hi)=>TIPS.forEach(n=>tips.push({id:hi+n,p:J(h,n)})));
+  tips.forEach((o,i)=>{dots[i].visible=!!o.p;if(o.p)dots[i].position.copy(o.p)});
+  if(!placed)return calibrate(dt);
+  kb.updateMatrixWorld(true);
+  tips.forEach((o,i)=>{
+    const d=dots[i];
+    if(!o.p){down[o.id]=true;return}           // perdeu rastreio: exige levantar antes de apertar de novo
+    if(down[o.id]===undefined)down[o.id]=true; // logo após posicionar: exige levantar o dedo
+    const l=kb.worldToLocal(o.p.clone());
+    if(!down[o.id]&&l.y<PRESS){
+      down[o.id]=true;d.material.color.set(0x66ff99);
+      const k=keys.find(k=>Math.abs(l.x-k.cx)<k.hw&&Math.abs(l.z-k.cz)<k.hd);
+      if(k)press(k);
+    }else if(down[o.id]&&l.y>RELEASE){down[o.id]=false;d.material.color.set(0x66ccff)}
+  });
+  for(const k of keys){k.flash=Math.max(0,k.flash-dt*4);if(k.ch==='⇧'&&shift)k.flash=1;
+    k.m.material.color.lerpColors(base,hi,k.flash)}
+}
+
+let prevT=0;
+renderer.setAnimationLoop(t=>{
+  const dt=Math.min((t-prevT)/1000,.1);prevT=t;
+  if(renderer.xr.isPresenting)step(dt);
+  renderer.render(scene,camera);
+});
+</script>
+</body></html>
