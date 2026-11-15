@@ -1,31 +1,46 @@
 <!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Teclado de Superfície VR</title>
+<title>Teclado de Superfície VR v2</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#eee}
-#info{position:fixed;inset:0 0 auto 0;padding:16px;font-size:15px;line-height:1.5;max-width:520px}
+#info{position:fixed;inset:0 0 auto 0;padding:16px;font-size:15px;line-height:1.5;max-width:560px}
+code{background:#222;padding:1px 5px;border-radius:4px}
 </style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 </head><body>
-<div id="info"><b>Teclado de superfície (WebXR)</b><br>
-Abra no navegador do Quest, toque em <b>START AR</b>, ative o rastreamento de mãos, coloque as duas mãos abertas sobre uma mesa e fique parado por ~1,5 s. O teclado aparece ali. Toque nas teclas com os dedos.</div>
+<div id="info"><b>Teclado de superfície (WebXR) v2</b><br>
+Toque em <b>START AR</b>, coloque as duas mãos abertas sobre a mesa e fique parado ~1,5 s.<br>
+Ajustes pela URL: <code>?press=0.016&amp;release=0.028&amp;pred=0.03&amp;fps=90&amp;scale=0.8&amp;dots=1</code></div>
 <script type="module">
 import * as THREE from 'three';
 import {ARButton} from 'three/addons/webxr/ARButton.js';
 
-const P=0.024;               // distância entre teclas (m)
-const PRESS=0.018, RELEASE=0.035; // alturas (m) para apertar/soltar — ajuste se precisar
+const Q=new URLSearchParams(location.search),num=(k,d)=>Q.has(k)&&isFinite(+Q.get(k))?+Q.get(k):d;
+const P=0.024;                    // distância entre teclas (m)
+const PRESS=num('press',.016);    // altura (m) onde conta como toque
+const RELEASE=num('release',.028);// altura (m) para rearmar o dedo
+const PRED=num('pred',.03);       // predição (s) para compensar atraso
+const SHOW_DOTS=Q.get('dots')==='1';
 
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-renderer.setPixelRatio(devicePixelRatio);renderer.setSize(innerWidth,innerHeight);
-renderer.xr.enabled=true;document.body.appendChild(renderer.domElement);
+const renderer=new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'});
+renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;
+renderer.xr.setFramebufferScaleFactor(num('scale',.8));
+renderer.xr.setFoveation(1);
+document.body.appendChild(renderer.domElement);
 document.body.appendChild(ARButton.createButton(renderer,{optionalFeatures:['hand-tracking','local-floor']}));
+renderer.xr.addEventListener('sessionstart',()=>{
+  const s=renderer.xr.getSession();
+  if(s.supportedFrameRates&&s.updateTargetFrameRate){
+    const want=num('fps',Math.max(...s.supportedFrameRates));
+    s.updateTargetFrameRate(want).catch(()=>{});
+  }
+});
 const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.01,20);
 scene.add(camera,new THREE.HemisphereLight(0xffffff,0x444455,2.2));
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 
-// painel de texto desenhado em canvas
 function panel(w,h,px){
   const c=document.createElement('canvas');c.width=px;c.height=Math.round(px*h/w);
   const t=new THREE.CanvasTexture(c);
@@ -34,7 +49,6 @@ function panel(w,h,px){
   return m;
 }
 
-// mensagem presa à cabeça
 const msg=panel(.3,.07,1024);msg.position.set(0,-.14,-.5);camera.add(msg);
 let lastMsg='';
 function say(s){if(s===lastMsg)return;lastMsg=s;msg.visible=true;
@@ -42,7 +56,6 @@ function say(s){if(s===lastMsg)return;lastMsg=s;msg.visible=true;
     g.font='44px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(s,w/2,h/2)})}
 say('Coloque as duas mãos abertas sobre a mesa');
 
-// teclado
 const kb=new THREE.Group();kb.visible=false;scene.add(kb);
 const plate=new THREE.Mesh(new THREE.BoxGeometry(10*P+.012,.002,4*P+.012),new THREE.MeshStandardMaterial({color:0x0b0d14,transparent:true,opacity:.6}));
 plate.position.y=.001;kb.add(plate);
@@ -63,10 +76,10 @@ layout.forEach((row,r)=>{let x=offs[r];row.forEach(([ch,u])=>{
   lab.draw((g,w,h)=>{g.fillStyle='#fff';g.font=`${h*.7}px sans-serif`;g.textAlign='center';g.textBaseline='middle';
     g.fillText(ch==='␣'?'espaço':ch,w/2,h/2)});
   lab.rotation.x=-Math.PI/2;lab.position.set(cx,.0075,cz);
-  kb.add(m,lab);keys.push({m,ch,cx,cz,hw:u*P/2,hd:P/2,flash:0});
+  kb.add(m,lab);keys.push({m,ch,cx,cz,hw:u*P/2,hd:P/2,flash:0,hover:false});
 })});
+const keyAt=l=>{for(const k of keys)if(Math.abs(l.x-k.cx)<k.hw&&Math.abs(l.z-k.cz)<k.hd)return k;return null};
 
-// tela de texto digitado
 const out=panel(.26,.07,1024);out.position.set(0,.11,-.09);out.rotation.x=-.5;kb.add(out);
 let text='',shift=false;
 function drawText(){out.draw((g,w,h)=>{g.fillStyle='rgba(20,22,30,.85)';g.fillRect(0,0,w,h);
@@ -74,18 +87,18 @@ function drawText(){out.draw((g,w,h)=>{g.fillStyle='rgba(20,22,30,.85)';g.fillRe
   g.fillText((text.replace(/\n/g,'↵')+'▏').slice(-28),24,h/2)})}
 drawText();
 
-// som de clique
 let ac;function click(){try{ac=ac||new AudioContext();const o=ac.createOscillator(),g=ac.createGain();
   o.frequency.value=900;g.gain.setValueAtTime(.15,ac.currentTime);
   g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+.05);o.connect(g).connect(ac.destination);
   o.start();o.stop(ac.currentTime+.06)}catch(e){}}
 
-// mãos
 const hands=[renderer.xr.getHand(0),renderer.xr.getHand(1)];hands.forEach(h=>scene.add(h));
-const J=(h,n)=>{const j=h.joints&&h.joints[n];return j&&j.visible?j.getWorldPosition(new THREE.Vector3()):null};
+const J=(h,n,o=new THREE.Vector3())=>{const j=h.joints&&h.joints[n];return j&&j.visible?j.getWorldPosition(o):null};
 const TIPS=['index-finger-tip','middle-finger-tip','ring-finger-tip','pinky-finger-tip'];
-const dots=[];for(let i=0;i<8;i++){const d=new THREE.Mesh(new THREE.SphereGeometry(.007),new THREE.MeshBasicMaterial({color:0x66ccff}));d.visible=false;scene.add(d);dots.push(d)}
-const down={};
+const dotGeo=new THREE.SphereGeometry(.006,8,6),dots=[];
+for(let i=0;i<8;i++){const d=new THREE.Mesh(dotGeo,new THREE.MeshBasicMaterial({color:0x66ccff}));d.visible=false;scene.add(d);dots.push(d)}
+const tipState=[];
+for(let i=0;i<8;i++)tipState.push({p:new THREE.Vector3(),l:new THREE.Vector3(),has:false,init:false,armed:false,y:0,v:0,t:0});
 let placed=false,hold=0,prevC=null;
 
 function press(k){
@@ -104,7 +117,7 @@ function place(ix){
   kb.rotation.set(0,yaw,0);
   kb.position.set(mid.x,sy,mid.z).addScaledVector(new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),.5*P);
   kb.visible=true;placed=true;hold=0;
-  for(const k in down)delete down[k];
+  tipState.forEach(s=>s.init=false);
   say('Pronto! Digite na mesa');setTimeout(()=>{if(placed)msg.visible=false},2500);
 }
 
@@ -124,31 +137,40 @@ function calibrate(dt){
   if(hold>1.2)place(ix);
 }
 
-function step(dt){
-  const tips=[];
-  hands.forEach((h,hi)=>TIPS.forEach(n=>tips.push({id:hi+n,p:J(h,n)})));
-  tips.forEach((o,i)=>{dots[i].visible=!!o.p;if(o.p)dots[i].position.copy(o.p)});
+function step(dt,now){
+  let i=0;
+  for(const h of hands)for(const n of TIPS){
+    const s=tipState[i],d=dots[i++];
+    s.has=!!J(h,n,s.p);
+    if(SHOW_DOTS){d.visible=s.has;if(s.has)d.position.copy(s.p)}
+  }
   if(!placed)return calibrate(dt);
+  dt=Math.max(dt,.004);
   kb.updateMatrixWorld(true);
-  tips.forEach((o,i)=>{
-    const d=dots[i];
-    if(!o.p){down[o.id]=true;return}           // perdeu rastreio: exige levantar antes de apertar de novo
-    if(down[o.id]===undefined)down[o.id]=true; // logo após posicionar: exige levantar o dedo
-    const l=kb.worldToLocal(o.p.clone());
-    if(!down[o.id]&&l.y<PRESS){
-      down[o.id]=true;d.material.color.set(0x66ff99);
-      const k=keys.find(k=>Math.abs(l.x-k.cx)<k.hw&&Math.abs(l.z-k.cz)<k.hd);
-      if(k)press(k);
-    }else if(down[o.id]&&l.y>RELEASE){down[o.id]=false;d.material.color.set(0x66ccff)}
-  });
+  for(const k of keys)k.hover=false;
+  i=0;
+  for(const s of tipState){
+    const d=dots[i++];
+    if(!s.has){s.init=false;continue}
+    s.l.copy(s.p);kb.worldToLocal(s.l);
+    const y=s.l.y;
+    if(!s.init){s.init=true;s.y=y;s.v=0;s.armed=y>RELEASE;continue}
+    s.v+=((y-s.y)/dt-s.v)*.5;s.y=y;           // velocidade vertical suavizada
+    const k=keyAt(s.l);
+    if(k&&y<.05)k.hover=true;
+    if(s.armed){
+      // dispara pela posição prevista, só se o dedo estiver descendo
+      if(k&&s.v<-.03&&y+s.v*PRED<PRESS&&now-s.t>70){s.armed=false;s.t=now;press(k);if(SHOW_DOTS)d.material.color.set(0x66ff99)}
+    }else if(y>RELEASE){s.armed=true;if(SHOW_DOTS)d.material.color.set(0x66ccff)}
+  }
   for(const k of keys){k.flash=Math.max(0,k.flash-dt*4);if(k.ch==='⇧'&&shift)k.flash=1;
-    k.m.material.color.lerpColors(base,hi,k.flash)}
+    k.m.material.color.lerpColors(base,hi,Math.max(k.flash,k.hover?.3:0))}
 }
 
 let prevT=0;
 renderer.setAnimationLoop(t=>{
   const dt=Math.min((t-prevT)/1000,.1);prevT=t;
-  if(renderer.xr.isPresenting)step(dt);
+  if(renderer.xr.isPresenting)step(dt,t);
   renderer.render(scene,camera);
 });
 </script>
